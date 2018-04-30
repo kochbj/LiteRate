@@ -492,7 +492,6 @@ p = argparse.ArgumentParser() #description='<input file>')
 
 p.add_argument('-v',       action='version', version='%(prog)s')
 p.add_argument('-d',       type=str, help='data file', default="", metavar="")
-p.add_argument('-t',       type=str, help='trait file', default="", metavar="") 
 p.add_argument('-n',       type=int, help='n. MCMC iterations', default=10000000, metavar=10000000)
 p.add_argument('-model',   type=int, help='0: no correlation, 1: logistic correlation', default=1, metavar=1)
 p.add_argument('-p',       type=int, help='print frequency', default=1000, metavar=1000) 
@@ -516,11 +515,13 @@ p_freq = args.p
 
 
 ####### Parse DATA #######
-f = args.d
-#f = "C:\\Users/bernard/Documents/GitHub/LiteRate/example_dataTAD.txt"
-t_file=np.loadtxt(f, skiprows=1)
-ts_years = t_file[:,2].astype(int)
-te_years = t_file[:,3].astype(int)
+#f = args.d
+f ="C:\\Users/bernard/Documents/GitHub/LiteRate/example_dataTAD.severelyskewed.traitrate.txt"
+trait_df=pd.read_csv(f,sep='\t')
+
+#t_file=np.loadtxt(f, skiprows=1)
+ts_years = np.array(trait_df.iloc[:,2]).astype(int)
+te_years = np.array(trait_df.iloc[:,3]).astype(int)
 
 #te_years = np.round(np.random.uniform(1950,2017,1000)).astype(int)
 #ts_years = np.round(np.random.uniform(1950,te_years,1000)).astype(int)
@@ -567,31 +568,22 @@ for i in species_durations:
 	tr_birth_events  += [species_trait_array[0]] # trait value at origination
 	tr_death_events  += [species_trait_array[-1]] # trait value at extinction
 '''
-
 #WRITE FAKE TRAIT TO FILES
 '''
-import pandas as pd,numpy as np
 temp=pd.read_csv('C:\\Users/bernard/Documents/GitHub/LiteRate/example_dataTAD.txt',sep='\t')
 min_ts=temp.ts.min()
 max_te=temp.te.max()
-years=['species']+list(map(str,list(range(min_ts,max_te+1))))
-with open('C:\\Users/bernard/Documents/GitHub/LiteRate/example_dataTAD.trait.severelyskewed.txt','w') as f:
+years=['clade','species','ts','te']+list(map(str,list(range(min_ts,max_te+1))))
+with open('C:\\Users/bernard/Documents/GitHub/LiteRate/example_dataTAD.severelyskewed.traitrate.txt','w') as f:
     f.write('\t'.join(years)+'\n')
     for i,row in temp.iterrows():
         species_trait_array = np.sort(np.random.uniform(-5,5,int(row.te-row.ts+1) )) # severely skewed values
-        species_trait_array= [int(row.species)]+ ["NA"]*int(row.ts-min_ts) + list(species_trait_array) + ["NA"]*int(max_te-row.te)
+        species_trait_array= [int(row.clade),int(row.species),int(row.ts),int(row.te)]+ ["NA"]*int(row.ts-min_ts) + list(species_trait_array) + ["NA"]*int(max_te-row.te)
         species_trait_array = list(map(str,species_trait_array))
         f.write('\t'.join(species_trait_array)+'\n')
-
-with open('C:\\Users/bernard/Documents/GitHub/LiteRate/example_dataTAD.trait.skewed.txt','w') as f:
-    f.write('\t'.join(years)+'\n')
-    for i,row in temp.iterrows():        
-        species_trait_array = np.sort(np.random.uniform(0,2,int(row.te-row.ts+1) )) # severely skewed values
-        species_trait_array= [int(row.species)]+ ["NA"]*int(row.ts-min_ts) + list(species_trait_array) + ["NA"]*int(max_te-row.te)
-        species_trait_array = list(map(str,species_trait_array))
-        f.write('\t'.join(species_trait_array)+'\n')
-        
 '''
+
+#LOAD TRAITS FROM FILE
 
 trait_list_of_arrays  = []
 
@@ -602,21 +594,17 @@ tr_death_events =[]
 
 list_all_values = []
 
-#t = 'C:\\Users/bernard/Documents/GitHub/LiteRate/example_dataTAD.trait.skewed.txt'
-t=args.t
-trait_df=pd.read_csv(t,sep='\t')
-trait_df.set_index('species',inplace=True)
+
 for i, row in trait_df.iterrows():    
-    tsy=str(ts_years[i-1])
-    tey=str(te_years[i-1])
+    tsy=str(int(row[2]))
+    tey=str(int(row[3]))
     tr_birth_events  += [row[tsy]] # trait value at origination
     tr_death_events  += [row[tey]] # trait value at extinction
-    species_trait_array=np.array(row.dropna())
+    species_trait_array=np.array(row[4:].dropna())
     list_all_values+=list(species_trait_array)
     trait_list_of_arrays.append(species_trait_array)
     tr_waiting_times += list(species_trait_array) # all trait values
-    
-    
+ 
 
 # define correlation function
 tranform_rate_func = transform_rate_logistic
