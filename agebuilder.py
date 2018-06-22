@@ -26,10 +26,10 @@ args.o.write('\t'.join(years)+'\n')
 
 def create_outrow(row,outfile,age_type):
     if age_type=='s':
-        age = list(range(0,int(row.ts-row.te+1)))
+        age = list(range(0,int(row.te-row.ts+1)))
     else:
         age = list(range(int(row.ts-clade_age[row.clade]), int(row.te-clade_age[row.clade])+1))
-    species_trait_array= [int(row.clade),int(row.species),int(row.ts),int(row.te)]+ ["NA"]*int(row.ts-min_ts) + age + ["NA"]*int(max_te-row.te)
+    species_trait_array= [int(row[0]),int(row[1]),int(row.ts),int(row.te)]+ ["NA"]*int(row.ts-min_ts) + age + ["NA"]*int(max_te-row.te)
     species_trait_array = list(map(str,species_trait_array))
     outfile.write('\t'.join(species_trait_array)+'\n')
 
