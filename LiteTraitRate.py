@@ -196,12 +196,11 @@ def get_likelihood_continuous_trait(l0,m0,alphaL,alphaM,tranf_rate_func):
 	return lik1+lik2+lik3+lik4
 
 def get_likelihood_continuous_trait_vect(l0,m0,alphaL,alphaM,tranf_rate_func,list_indx):
-	[ind_l2,ind_l1,ind_m2,ind_m1] = list_indx
+	[ind_l2,ind_l1,ind_m2,ind_m1] = list_indx 
 	lik1 = sum(log(tranf_rate_func(l0[ind_l1],alphaL,tr_birth_events)))
 	lik2 = -sum(tranf_rate_func(l0[ind_l2],alphaL,tr_waiting_times))
 	lik3 = sum(log(tranf_rate_func(m0[ind_m1],alphaM,tr_death_events)))
 	lik4 = -sum(tranf_rate_func(m0[ind_m2],alphaM,tr_waiting_times))
-	#print lik1,lik2,lik3,lik4,l0,m0,alphaL,alphaM
 	return lik1+lik2+lik3+lik4
 
 ####### TRAIT-DEPENDENT FUNCTIONS ######## 
@@ -223,7 +222,6 @@ def map_trait_time(ts,te,trait_list):
 	tm_waiting_times = np.array(tm_waiting_times)	
 	tm_birth_events  = np.array(tm_birth_events )	
 	tm_death_events  = np.array(tm_death_events )	
-		
 	return tm_waiting_times,tm_birth_events,tm_death_events
 
 def get_rate_index_trait(times,tm_events):
@@ -629,7 +627,6 @@ tr_birth_events  = np.array(tr_birth_events )
 tr_death_events  = np.array(tr_death_events )[te>0]
 tm_waiting_times,tm_birth_events,tm_death_events = map_trait_time(ts,te,species_trait_array)
 
-print tm_birth_events[0:10], tm_death_events[0:10]
 
 
 # init params
