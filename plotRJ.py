@@ -84,15 +84,69 @@ def get_prior_shift(t_start,t_end,bins_histogram):
 	print np.array([prior_s,bf2,bf6])
 	return [prior_s,bf2,bf6]
 
+def get_sp_in_frame_br_length(up,lo,ts,te):
+	# index species present in time frame
+	n_all_inframe = np.intersect1d((ts >= lo).nonzero()[0], (te <= up).nonzero()[0])
+	# tot br length within time frame
+	n_t_ts,n_t_te=zeros(len(ts)),zeros(len(ts))
+	n_t_ts[n_all_inframe]= ts[n_all_inframe]   # speciation events before time frame
+	n_t_ts[(n_t_ts>up).nonzero()]=up           # for which length is accounted only from $up$ rather than from $ts$	
+	n_t_te[n_all_inframe]= te[n_all_inframe]   # extinction events in time frame
+	n_t_te[np.intersect1d((n_t_te<lo).nonzero()[0], n_all_inframe)]=lo     # for which length is accounted only until $lo$ rather than to $te$
+	# vector of br lengths within time frame  #(scaled by rho)
+	n_S=((n_t_ts[n_all_inframe]-n_t_te[n_all_inframe])) #*rhos[n_all_inframe])
+	return n_S
+
+def precompute_events(arg):
+	[up,lo,ts,te]=arg
+	# indexes of the species within time frame
+	L_events=np.intersect1d((ts <= up).nonzero()[0], (ts > lo).nonzero()[0])
+	M_events=np.intersect1d((te <= up).nonzero()[0], (te > lo).nonzero()[0])	
+	# get total time lived (or tot branch length) within time window
+	n_S = get_sp_in_frame_br_length(up,lo,ts,te)
+	return len(L_events), len(M_events), sum(n_S)
+
+def get_standing_diversity(f):
+	t_file=np.loadtxt(f, skiprows=1)
+	ts_years = t_file[:,2]
+	te_years = t_file[:,3]
+	if args.present_year== -1: # to load regular pyrate input
+		ts = ts_years
+		te = te_years
+	elif args.present_year==0: # find max year and set to present
+		ts = max(te_years) - ts_years 
+		te = max(te_years) - te_years 
+	else: # user-spec present year
+		ts = args.present_year - ts_years 
+		te = args.present_year - te_years 
+	
+	ts,te = ts.astype(int),te.astype(int)
+	
+
+	max_time = max(ts)
+	min_time = min(te)	
+	sp_events_bin = []
+	ex_events_bin = []
+	br_length_bin = []
+	bins = np.arange(min_time,max_time+1)[::-1]
+	for i in range(len(bins)-1):
+		a,b,c = precompute_events([bins[i],bins[i+1],ts,te])
+		br_length_bin.append(c)
+	br_length_bin = np.array(br_length_bin)
+	print(br_length_bin)
+	#br_length_bin = br_length_bin[1:]	
+	return br_length_bin
 
 def get_marginal_rates(f_name,min_age,max_age,nbins=0,burnin=0.2):
 	# returns a list of 5 items:
 	# 1. a vector of times (age of each marginal rate)
 	# 2-4. mean, min and max marginal rates (95% HPD)
 	# 5. a vector of times of rate shift
+	print(min_age,max_age)
 	f = file(f_name,'U')
 	if nbins==0:
 		nbins = abs(int(max_age-min_age))
+		print("nbins",nbins)
 	post_rate=f.readlines()
 	if present_year == -1: 
 		bins_histogram = np.linspace(min_age,max_age,nbins+1)	
@@ -143,9 +197,19 @@ def get_marginal_rates(f_name,min_age,max_age,nbins=0,burnin=0.2):
 	#print time_frames
 	#quit()
 	time_frames = time_frames[1:]
+	
+	if f_name.find('_sp_rates.log')!=-1: input_file=f_name.replace('pyrate_mcmc_logs/','').replace('_sp_rates.log','.txt')
+	else: input_file=f_name.replace('pyrate_mcmc_logs/','').replace('_ex_rates.log','.txt')
+	if os.path.exists(input_file)==False: input_file = input_file.replace('txt','tsv')
+	 
+	standing_diversity=get_standing_diversity(input_file)
+	standing_diversity=standing_diversity[::-1] #no idea why I have to do this
+	immigration_rates=standing_diversity * mean_rates
+	im_rates_min=standing_diversity * min_rates
+	im_rates_max=standing_diversity * max_rates
 	#print len(time_frames),len(mean_rates), 
 	n_mcmc_samples = len(post_rate)-burnin # number of samples used to normalize frequencies of rate shifts
-	return [time_frames,mean_rates,np.array(min_rates),np.array(max_rates),np.array(times_of_shift),n_mcmc_samples]
+	return [time_frames,mean_rates,np.array(min_rates),np.array(max_rates),np.array(times_of_shift),n_mcmc_samples,immigration_rates,im_rates_min,im_rates_max]
 
 
 def get_r_plot(res,col,parameter,min_age,max_age,plot_title,plot_log,run_simulation=1):
@@ -161,16 +225,35 @@ def get_r_plot(res,col,parameter,min_age,max_age,plot_title,plot_log,run_simulat
 	out_str += print_R_vec("\nrate",res[1][::-1])
 	out_str += print_R_vec("\nminHPD",res[2][::-1])
 	out_str += print_R_vec("\nmaxHPD",res[3][::-1])
+	
+	out_str += print_R_vec("\nmigrate",res[6][::-1]) 
+	out_str += print_R_vec("\nmi_minHPD",res[7][::-1])
+	out_str += print_R_vec("\nmi_maxHPD",res[8][::-1]) 
+
+	
 	if plot_log==0:
 		out_str += "\nplot(time,time,type = 'n', ylim = c(%s, %s), xlim = c(%s,%s), ylab = '%s', xlab = 'Time (%s)',main='%s' )" \
 			% (0,1.1*np.nanmax(res[3]),minXaxis,maxXaxis,parameter,time_lab,plot_title) 
 		out_str += "\npolygon(c(time, rev(time)), c(maxHPD, rev(minHPD)), col = alpha('%s',0.3), border = NA)" % (col)
 		out_str += "\nlines(time,rate, col = '%s', lwd=2)" % (col)
+		
+		#MIGRATION RATES
+		out_str += "\nplot(time,time,type = 'n', ylim = c(%s, %s), xlim = c(%s,%s), ylab = '%s', xlab = 'Time (%s)',main='%s' )" \
+			% (0,1.1*np.nanmax(res[6]),minXaxis,maxXaxis,"Migration Rate",time_lab,plot_title)
+		out_str += "\npolygon(c(time, rev(time)), c(mi_maxHPD, rev(mi_minHPD)), col = alpha('%s',0.3), border = NA)" % (col)
+		out_str += "\nlines(time,migrate, col = '%s', lwd=2)" % (col)
+
 	else:
 		out_str += "\nplot(time,time,type = 'n', ylim = c(%s, %s), xlim = c(%s,%s), ylab = 'Log10 %s', xlab = 'Time (%s)',main='%s' )" \
 			% (np.nanmin(np.log10(0.9*res[2])),np.nanmax(np.log10(1.1*res[3])),minXaxis,maxXaxis,parameter,time_lab,plot_title) 
 		out_str += "\npolygon(c(time, rev(time)), c(log10(maxHPD), rev(log10(minHPD))), col = alpha('%s',0.3), border = NA)" % (col)
 		out_str += "\nlines(time,log10(rate), col = '%s', lwd=2)" % (col)
+		
+		#MIGRATON RATES
+		out_str += "\nplot(time,time,type = 'n', ylim = c(%s, %s), xlim = c(%s,%s), ylab = 'Log10 %s', xlab = 'Time (%s)',main='%s' )" \
+			% (np.nanmin(np.log10(0.9*res[2])),np.nanmax(np.log10(1.1*res[6])),minXaxis,maxXaxis,"Migration Rate",time_lab,plot_title) 
+		out_str += "\npolygon(c(time, rev(time)), c(log10(mi_maxHPD), rev(log10(mi_minHPD))), col = alpha('%s',0.3), border = NA)" % (col)
+		out_str += "\nlines(time,log10(migrate), col = '%s', lwd=2)" % (col)
 		
 	# add barplot rate shifts
 	if present_year == -1: bins_histogram = np.linspace(min_age,max_age,len(res[0]))
@@ -236,8 +319,24 @@ def plot_trait_params(mcmc_tbl,head,axes,burnin=0.2):
 	ax1.set_ylabel('Birth')
 	ax3.set_ylabel('Death')
 	
-def plot_rate_ribbons(b_res,d_res,b_ax=None,d_ax=None,logT=-1):
-	glbl_min=np.nanmin([b_res[2],d_res[2]])
+def plot_rate_ribbons(b_res,d_res,box_quartiles,\
+				  x0_l,kappa_l,x0_m,kappa_m,\
+				  b_ax=None,d_ax=None,logT=-1):
+	
+	#trait transform
+	b_res_q=[]
+	d_res_q=[]
+	#first transform mean rates and hpd margins for trait value zero
+	for i in range(len(b_res)):
+		b_res[i]=  transform_rate_logistic(b_res[i],x0_l,kappa_l,0,box_quartiles[0],box_quartiles[-1])
+		d_res[i]=  transform_rate_logistic(d_res[i],x0_m,kappa_m,0,box_quartiles[0],box_quartiles[-1])
+	#transform mean rates for trait quartiles:
+	for i in range(len(box_quartiles)):
+		b_res_q.append(transform_rate_logistic(b_res[i],x0_l,kappa_l,box_quartiles[i],box_quartiles[0],box_quartiles[-1]))
+		d_res_q.append(transform_rate_logistic(d_res[i],x0_m,kappa_m,box_quartiles[i],box_quartiles[0],box_quartiles[-1]))
+	
+	
+	glbl_min=np.nanmin([b_res[2],d_res[2]])	
 	glbl_max=np.nanmax([b_res[3],d_res[3]])
 	
 	b_ax.set_ylim(glbl_min,glbl_max)
@@ -254,6 +353,11 @@ def plot_rate_ribbons(b_res,d_res,b_ax=None,d_ax=None,logT=-1):
 	d_ax.plot(d_res[0],d_res[1][::-1], lw=2, color='red')
 	d_ax.fill_between(d_res[0], d_res[2][::-1], d_res[3][::-1], facecolor='red', alpha=0.5)              
 	d_ax.set_xlabel('Year')
+	
+	for q in range(len(box_quartiles)):
+		b_ax.plot(b_res[0],b_res_q[q][::-1], lw=2, ls='dashed',color='black')
+		d_ax.plot(d_res[0],d_res_q[q][::-1], lw=2, ls='dashed',color='black')
+			
 	if logT==1:
 		b_ax.set_yscale('log',basey=10)
 		b_ax.set_title('log10 Rates')
@@ -263,43 +367,47 @@ def plot_rate_ribbons(b_res,d_res,b_ax=None,d_ax=None,logT=-1):
 	
 
 #helper for calculate trait rates
-def transform_rate_logistic(r0,x0,kappa,trait):
-	# r0 is the max rate
+def rescale_trait(trait,t_min,t_max):
+	trait=np.log1p(trait)
+	return ((trait-tr_min)/(tr_max-tr_min)-.5)
+
+def transform_rate_logistic(r0,x0,kappa,trait,t_min,t_max):
+	# r0 is the rate at 0 so we need to back out the max rate
+	trait=rescale_trait(trait)
 	rate_at_trait = r0 / ( 1. + exp( -kappa * (trait-x0) )    )
 	return rate_at_trait
 
-def calculate_trait_rates(trait_profile,base_rate, x0, kappa):
+def calculate_trait_rates(trait_profile,base_rate, x0, kappa, t_min, t_max):
 	#Here trait profile is a array of counts of species for different trait values in a SPECIFIC year
 	#float(tval) is therefore the value of the actual trait
-	#trait_profile[tval] is the number of bands, so if there are no bands just return none
-	trait_rates=pd.Series(trait_profile.index).apply(lambda tval: transform_rate_logistic(base_rate,x0,kappa,float(tval) ) if trait_profile[tval]!=0 else None ) 
+	#trait_profile[tval] is the number of species, so if there are no species just return none
+	trait_rates=pd.Series(trait_profile.index).apply(lambda tval: transform_rate_logistic(base_rate,x0,kappa,float(tval),t_min,t_max ) if trait_profile[tval]!=0 else None ) 
 	return trait_rates
 
 #Create two tables: trait x year x abundance & trait x year x over baseline	
-def make_trait_value_tables(trait_file,trait_type,res,par,x0,kappa):
+def make_trait_value_tables(trait_file,res,par,x0,kappa):
 	trait_df=pd.read_csv(trait_file,sep='\t',index_col=False).iloc[:,4:] # Skip clade, species, ts, te
-	if trait_type=='int':
+	tr_min=trait_df.min().min()
+	tr_max=trait_df.max().max()
+	box_quartiles=[tr_min,trait_df.unstack().quantile(.25),trait_df.unstack().quantile(.5),trait_df.unstack().quantile(.75),tr_max]
 		#get range of trait vals
-		t_min=trait_df.min().min().astype(int)
-		t_max=trait_df.max().max().astype(int)
-		t_bins=np.array(range(t_min,t_max+1))+.5 #I dont think the .5 is necessary but I'm doing it for consistency so this looks like time_frames
-		
-		#create a dataframe trait value X year filled with number of species alive
-		t_year_hist=trait_df.apply(lambda clm: np.histogram(a=clm.dropna(),bins=t_bins)[0],axis=0)
-		base_rates=pd.Series(res[1][::-1]) #WHY IS THIS REVERSED
-		base_rates.index=trait_df.columns[:-1] #WHY do this Daniele (looking at time_frames)?
-		#see calculate_trait_rates to understand whats going on here, but result is  
-		rate_df=pd.Series(base_rates.index).apply(lambda year:calculate_trait_rates(t_year_hist.loc[:,year],base_rates[year],x0,kappa)) #note that rate.name is a year
-		rate_df.index=trait_df.columns[:-1] #WHY do this Daniele (looking at time_frames)?
-		
-		
-		rate_df.index.rename('year',inplace=True)
-		rate_df['ALL']=base_rates
-		rate_df=rate_df.transpose()
-		T=t_year_hist.sum()
-		T.name="ALL"
-		t_year_hist=t_year_hist.append(T)
-		return t_year_hist, rate_df
+	tr_bins=np.linspace(tr_min,tr_max,15) #I dont think the .5 is necessary but I'm doing it for consistency so this looks like time_frames
+	
+	#create a dataframe trait value X year filled with number of species alive
+	t_year_hist=trait_df.apply(lambda clm: np.histogram(a=clm.dropna(),bins=tr_bins)[0],axis=0)
+	base_rates=pd.Series(res[1][::-1]) #WHY IS THIS REVERSED
+	base_rates.index=trait_df.columns[:-1] 
+	#see calculate_trait_rates to understand whats going on here, but result is rate hist 
+	rate_df=pd.Series(base_rates.index).apply(lambda year:calculate_trait_rates(t_year_hist.loc[:,year],base_rates[year],x0,kappa,t_min,t_max)) #note that rate.name is a year
+	rate_df.index=trait_df.columns[:-1] #WHY do this Daniele (looking at time_frames)?
+	
+	rate_df.index.rename('year',inplace=True)
+	rate_df['MAX']=base_rates
+	rate_df=rate_df.transpose()
+	T=t_year_hist.sum()
+	T.name="MAX"
+	t_year_hist=t_year_hist.append(T)
+	return t_year_hist, rate_df, box_quartiles
 
 #plot birth rate over BL, abundance, death rate over BL
 def make_seaborn_heatmaps(trait_abundance,trait_birth_tbl,trait_death_tbl,logT=-1,plot_title='default'):
@@ -343,7 +451,7 @@ def plot_marginal_rates(path_dir,trait_dir,name_tag="",bin_size=1.,burnin=0.2,mi
 	if logT==1: outname = "Log_"
 	else: outname = ""
 	if max_age>0: outname+= "t%s" % (int(max_age))
-	r_str = "\n\npdf(file='%s/%sRTT_plots.pdf',width=12, height=8)\npar(mfrow=c(2,3))\nlibrary(scales)" % (wd,outname)
+	r_str = "\n\npdf(file='%s/%sRTT_plots.pdf',width=12, height=8)\npar(mfrow=c(2,4))\nlibrary(scales)" % (wd,outname)
 	trait_out_pdf=PdfPages(wd+'/'+outname+'TRAITplots.pdf')
 	for mcmc_file in files:
 		if 2>1: #try:
@@ -381,21 +489,22 @@ def plot_marginal_rates(path_dir,trait_dir,name_tag="",bin_size=1.,burnin=0.2,mi
 			if 'x0_l' in head:
 				print(name_file)
 				trait_file=trait_dir+name_file.replace("_trait_mcmc",".txt")
-				print(trait_file)
 				fig, ((ax1, ax2 ,ax3), (ax4,ax5, ax6)) = plt.subplots(ncols=3,nrows=2)
 				fig.suptitle(name_file,y=1.02)
 				plot_trait_params(tbl,head,axes=[ax1,ax2,ax4,ax5],burnin=.2)
-				plot_rate_ribbons(b_res,d_res,ax3,ax6)
+				plot_rate_ribbons(tbl,head,b_res,d_res,ax3,ax6)
 				trait_out_pdf.savefig(fig, bbox_inches='tight')
 				
 				x0_l,kappa_l=get_trait_values(tbl,head,'l',burnin=.2)
-				abundance_df, bt_df=make_trait_value_tables(trait_file,'int',b_res,'birth',x0_l,kappa_l)
+				abundance_df, bt_df,box_quartiles=make_trait_value_tables(trait_file,b_res,'birth',x0_l,kappa_l)
 				
 				x0_m,kappa_m=get_trait_values(tbl,head,'m',burnin=.2)
-				abundance_df,dt_df=make_trait_value_tables(trait_file,'int',d_res,'death',x0_m,kappa_m)
+				abundance_df,dt_df=make_trait_value_tables(trait_file,d_res,'death',x0_m,kappa_m)
 				
-				map_fig=make_seaborn_heatmaps(abundance_df,bt_df,dt_df,plot_title=name_file)
-				trait_out_pdf.savefig(map_fig, bbox_inches='tight')
+				heatmap_fig=make_seaborn_heatmaps(abundance_df,bt_df,dt_df,plot_title=name_file)
+				trait_out_pdf.savefig(heatmap_fig, bbox_inches='tight')
+				
+				
 			
 		#except:
 		#	print "Could not read file:", mcmc_file
@@ -416,8 +525,7 @@ p = argparse.ArgumentParser() #description='<input file>')
 p.add_argument('input_data', metavar='<path to log files>', type=str,help='Input python file - see template',default="")
 p.add_argument('-logT', metavar='1', type=int,help='set to 1 to log transform rates',default=0)
 p.add_argument('-present_year',    type=int, help='set to > present AD to plot in time AD instead of time BP', default= -1, metavar= -1)
-p.add_argument('-trait_dir', metavar='<path to traitrate input>', type=str,help='Lite Trait Rate Input File if You Have Trait Rate',default="")
-p.add_argument('-trait_dtype', metavar='trait_type', type=str,help='Lite Trait Rate Input File',default="int", choices=['int','float'])
+p.add_argument('-trait_dir', metavar='<path to traitrate input file>', type=str,help='Lite Trait Rate Input File if You Have Trait Rate',default="")
 
 args = p.parse_args()
 path_dir_log_files = args.input_data
