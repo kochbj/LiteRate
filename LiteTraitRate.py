@@ -224,6 +224,63 @@ def map_trait_time(ts,te,trait_list):
 	tm_death_events  = np.array(tm_death_events )	
 	return tm_waiting_times,tm_birth_events,tm_death_events
 
+def map_all_times(trait_df):
+	tr_waiting_times=list()
+	tr_birth_events=list()
+	tr_death_events=list()
+	
+	tm_waiting_times =list()
+	tm_birth_events  =list()
+	tm_death_events  =list()
+
+	earliest = np.amax(trait_df['nts'])
+	latest = np.amin(trait_df['nte'])
+	for i, row in trait_df.iterrows():
+		#all trait values except first (first 3 are clade, species, ts, te, last 2 columns are nts,nte)
+		trait_array=list(row[4:-2].dropna())		 
+		if row.nts < earliest: 
+			tm_birth_events  += [row.nts] #no births allowed in first year
+			tr_birth_events  += [trait_array[0]]	
+			
+			tm_waiting_times += list(range(int(row.nte),int(row.nts)+1))
+			tr_waiting_times += trait_array[::-1]				
+		else:
+			tm_waiting_times += list(range(int(row.nte),int(row.nts))) #drop first year of waiting times
+			tr_waiting_times += trait_array[1:][::-1]
+		
+		if row.nte > 0:
+			tm_death_events  += [row.nte] # only add if taxon is extinct
+			tr_death_events += [trait_array[-1]]
+		
+	tm_waiting_times=np.array(tm_waiting_times)
+	tm_birth_events=np.array(tm_birth_events)
+	tm_death_events=np.array(tm_death_events)
+	
+	# log and rescale all trait values to -.5 to .5
+		
+	#if minimum trait is <0 translate up
+
+	pre_tr_min = .0001
+	if float(min(tr_waiting_times)) <0: pre_tr_min= float(min(tr_waiting_times))*-1 + pre_tr_min
+	
+	tr_waiting_times=np.log1p(np.array(tr_waiting_times)+pre_tr_min)	
+	tr_birth_events=np.log1p(np.array(tr_birth_events)+pre_tr_min)
+	tr_death_events=np.log1p(np.array(tr_death_events)+pre_tr_min)
+
+	tr_min=float(min(tr_waiting_times))
+	tr_max=float(max(tr_waiting_times))
+
+	tr_waiting_times = (tr_waiting_times - tr_min) / (tr_max-tr_min) -.5
+	tr_birth_events = (tr_birth_events - tr_min) / (tr_max-tr_min) -.5
+	tr_death_events = (tr_death_events - tr_min) / (tr_max-tr_min) -.5
+	
+	zero_trait = (np.log1p(0+pre_tr_min)-tr_min) / (tr_max-tr_min) -.5
+	
+	
+	return tm_birth_events, tm_death_events, tm_waiting_times,\
+	tr_birth_events, tr_death_events, tr_waiting_times,zero_trait
+
+
 def get_rate_index_trait(times,tm_events):
 	
 	indx_tm_waiting_times = np.zeros(len(tm_waiting_times)).astype(int)
@@ -314,11 +371,19 @@ def runMCMC(arg):
 	[L_acc, M_acc, timesLA, timesMA]  = arg
 	Poi_lambda_rjHP = 1
 	Gamma_rate = 1
+	# PARAMETERS OF THE LOGISTIC FUNCTION
+	# alpha[0] -> x0 # mid point
+	# alpha[1] -> kappa = steepness
 	alphaLA,alphaMA = np.zeros(2),np.zeros(2)
 	
 	# init priors
 	priorA = prior_gamma(L_acc) + prior_gamma(M_acc)
 	priorA += -log(max_time-min_time)*(len(L_acc)-1+len(M_acc)-1)
+	
+	#priors on logistic parameters
+	priorA += prior_sym_beta(alphaLA[0]+0.5, 2) + prior_sym_beta(alphaMA[0]+0.5, 2)
+	priorA += prior_normal(alphaLA[1],1)+prior_normal(alphaMA[1],1)
+	
 	priorPoiA = Poisson_prior(len(L_acc),Poi_lambda_rjHP)+Poisson_prior(len(M_acc),Poi_lambda_rjHP)
 	priorA += priorPoiA
 	
@@ -329,39 +394,7 @@ def runMCMC(arg):
 	# init likelihood
 	list_indexes = [indx_tm_birth_waiting_timesA,indx_tm_birth_eventsA,indx_tm_death_waiting_timesA,indx_tm_death_eventsA]
 	likA = get_likelihood_continuous_trait_vect(L_acc,M_acc,alphaLA,alphaMA,tranform_rate_func,list_indexes)
-	
-	# check likelihood LiteRate
-	# sp_events_bin = []
-	# ex_events_bin = []
-	# br_length_bin = []
-	# bins = np.arange(min_time,max_time+1)[::-1]
-	# for i in range(len(bins)-1):
-	# 	a,b,c = precompute_events([bins[i],bins[i+1]])
-	# 	sp_events_bin.append(a)
-	# 	ex_events_bin.append(b)
-	# 	br_length_bin.append(c)
-      # 
-	# sp_events_bin = np.array(sp_events_bin)
-	# ex_events_bin = np.array(ex_events_bin)
-	# br_length_bin = np.array(br_length_bin)
-	# n_bins = len(sp_events_bin)
-	# 
-	# # remove first bin
-	# sp_events_bin = sp_events_bin[1:]
-	# ex_events_bin = ex_events_bin[1:]
-	# br_length_bin = br_length_bin[1:]
-	# #max_time = max_time-1
-	# indLA = get_rate_index(timesLA,n_bins)
-	# indMA = get_rate_index(timesMA,n_bins)
-	# L_acc,M_acc = L_acc/2.,M_acc/2.
-	# likA_no_trait = sum(vect_lik(L_acc[indLA],M_acc[indMA],sp_events_bin,ex_events_bin,br_length_bin))
-	# print "WEGFDS", likA, likA_no_trait
-	# quit()
-	
-	
-	
-	
-	
+		
 	iteration = 0
 	while iteration < n_iterations:		
 		r = np.random.random(3)
@@ -394,13 +427,13 @@ def runMCMC(arg):
 				indx_tm_death_waiting_times,indx_tm_death_events = get_rate_index_trait(timesM,tm_death_events)
 			
 		elif r[0] < 0.8 and args.model != 0:
-			d_win = np.array([0.5,0.1])
+			d_win = np.array([0.1,1])
 			if r[2] < .5:
 				alphaL= update_sliding_win_unbounded_vec(alphaLA,d=d_win)
 			else:
 				alphaM= update_sliding_win_unbounded_vec(alphaMA,d=d_win)
 			
-		elif r[0] < 0.99:
+		elif r[0] < 0.99 and args.A==1:
 			# do RJ
 			L,timesL, M,timesM, hasting, update_L = RJMCMC([L_acc,M_acc, timesLA, timesMA])
 			if update_L==1: 
@@ -412,7 +445,7 @@ def runMCMC(arg):
 		else: 
 			# update HPs 
 			Poi_lambda_rjHP = get_post_rj_HP(len(L_acc),len(M_acc))
-			Gamma_rate = get_rate_HP(L_acc,M_acc)
+			#Gamma_rate = get_rate_HP(L_acc,M_acc)
 			gibbs=1
 		
 		# prevent super small time frames
@@ -426,9 +459,12 @@ def runMCMC(arg):
 			# prior on times of rate shift
 			prior += -log(max_time-min_time)*(len(L)-1+len(M)-1)
 			# priors on logistic parameters
+
+			prior += prior_sym_beta(alphaL[0]+0.5, 2) + prior_sym_beta(alphaM[0]+0.5, 2)			# prior on number of shifts
+
 			prior += prior_normal(alphaL[1],1)+prior_normal(alphaM[1],1)
-			if min([alphaL[0],alphaM[0]]) < allowed_x0_range[0] or max([alphaL[0],alphaM[0]]) > allowed_x0_range[1]:
-				prior = -np.inf
+
+
 			# prior on number of shifts
 			if priorPoi != 0: 
 				prior += priorPoi
@@ -462,7 +498,11 @@ def runMCMC(arg):
 		
 		if iteration % s_freq ==0:
 			# MCMC log
-			log_state = map(str,[iteration,likA+priorA,likA,priorA,mean(L_acc),mean(M_acc),len(L_acc),len(M_acc),alphaLA[0],alphaLA[1],alphaMA[0],alphaMA[1],max_time,min_time,Gamma_rate,Poi_lambda_rjHP])
+			log_state = map(str,[iteration,likA+priorA,likA,priorA,\
+				    tranform_rate_func(mean(L_acc),alphaLA,zero_trait),\
+				    tranform_rate_func(mean(M_acc),alphaLA,zero_trait),\
+				    len(L_acc),len(M_acc),alphaLA[0],alphaLA[1],alphaMA[0],alphaMA[1],\
+				    max_time,min_time,Gamma_rate,Poi_lambda_rjHP])
 			mcmc_logfile.write('\t'.join(log_state)+'\n')
 			mcmc_logfile.flush()
 			# log marginal rates/times
@@ -478,8 +518,8 @@ def runMCMC(arg):
 			# print on screen
 			print "\tsp.times:", timesLA
 			print "\tex.times:", timesMA
-			print "\tsp.rates:", L_acc
-			print "\tex.rates:", M_acc
+			print "\tsp.rates at 0:", tranform_rate_func(L_acc,alphaLA,zero_trait)
+			print "\tex.rates at 0:", tranform_rate_func(M_acc,alphaLA,zero_trait)
 			print "\tsp.alpha:", alphaLA
 			print "\tex.alpha:", alphaMA
 		
@@ -492,6 +532,7 @@ p.add_argument('-v',       action='version', version='%(prog)s')
 p.add_argument('-d',       type=str, help='data file', default="", metavar="")
 p.add_argument('-n',       type=int, help='n. MCMC iterations', default=10000000, metavar=10000000)
 p.add_argument('-model',   type=int, help='0: no correlation, 1: logistic correlation', default=1, metavar=1)
+p.add_argument('-A',       type=int, help='0: MCMC (constant baseline rate), 1: RJMCMC (default)', default=1, metavar=1)
 p.add_argument('-p',       type=int, help='print frequency', default=1000, metavar=1000) 
 p.add_argument('-s',       type=int, help='sampling frequency', default=1000, metavar=1000) 
 p.add_argument('-seed',    type=int, help='seed (set to -1 to make it random)', default= 1, metavar= 1)
@@ -517,115 +558,38 @@ f = args.d
 #f = './example_dataTAD.trait.severelyskewed.txt'
 
 trait_df=pd.read_csv(f,sep='\t')
-trait_df.set_index('species',inplace=True)
 ts_years = np.array(trait_df.ts).astype(int)
 te_years = np.array(trait_df.te).astype(int)
 
 
 if args.present_year== -1: # to load regular pyrate input
-	ts = ts_years
-	te = te_years
+	ts = trait_df['ts']
+	te = trait_df['te']
 elif args.present_year==0: # find max year and set to present
-	ts = max(te_years) - ts_years 
-	te = max(te_years) - te_years 
+	ts = max(trait_df['te']) - trait_df['ts'] 
+	te = max(trait_df['te']) - trait_df['te'] 
 else: # user-spec present year
-	ts = args.present_year - ts_years 
-	te = args.present_year - te_years 
+	ts = args.present_year - trait_df['ts'] 
+	te = args.present_year - trait_df['te'] 
 
 #ts,te = np.round(ts),np.round(te)
 max_time = max(ts)
 min_time = min(te)
+trait_df['nts']=ts
+trait_df['nte']=te
 
-
-trait_list_of_arrays  = []
-
-tr_waiting_times =[]
-tr_birth_events =[]
-tr_death_events =[]
-
-
-list_all_values = []
-
-
-for i, row in trait_df.iterrows():    
-    tr_birth_events  += [row[str(int(row.ts))]] # trait value at origination
-    tr_death_events  += [row[str(int(row.te))]] # trait value at extinction
-    species_trait_array=np.array(row[3:].dropna())
-    list_all_values+=list(species_trait_array)
-    trait_list_of_arrays.append(species_trait_array)
-    tr_waiting_times += list(species_trait_array) # all trait values
-
-
-
-#FAKE TRAITS DANIELE VERSION
-'''
-species_durations = (ts+1)-te # consider year of origination as a lived year
-
-trait_list_of_arrays  = []
-
-tr_waiting_times =[]
-tr_birth_events =[]
-tr_death_events =[]
-
-list_all_values = []
-for i in species_durations:
-	# make up some trait data
-	np.random.seed(int(i))
-	species_trait_array = np.sort(np.random.uniform(-5,5,int(i)) ) # severely skewed values
-	#species_trait_array = np.random.uniform(-5,5,int(i))          # no trait effects	
-	
-	# precompute stuff
-	list_all_values += list(species_trait_array)
-	trait_list_of_arrays.append(species_trait_array)
-	tr_waiting_times += list(species_trait_array) # all trait values
-	tr_birth_events  += [species_trait_array[0]] # trait value at origination
-	tr_death_events  += [species_trait_array[-1]] # trait value at extinction
-
-'''
-#WRITE FAKE TRAIT TO FILES
-'''
-import pandas as pd,numpy as np
-temp=pd.read_csv('./example_dataTAD.txt',sep='\t')
-min_ts=temp.ts.min()
-max_te=temp.te.max()
-years=['clade','species','ts','te',]+list(map(str,list(range(min_ts,max_te+1))))
-with open('./example_dataTAD.trait.severelyskewed.txt','w') as f:
-    f.write('\t'.join(years)+'\n')
-    for i,row in temp.iterrows():
-        np.random.seed(int(row.te-row.ts+1))
-        species_trait_array = np.sort(np.random.uniform(-5,5,int(row.te-row.ts+1) )) # severely skewed values
-        species_trait_array= [1,int(row.species),int(row.ts),int(row.te)]+ ["NA"]*int(row.ts-min_ts) + list(species_trait_array) + ["NA"]*int(max_te-row.te)
-        species_trait_array = list(map(str,species_trait_array))
-        f.write('\t'.join(species_trait_array)+'\n')
-        
-with open('C:\\Users/bernard/Documents/GitHub/LiteRate/example_dataTAD.trait.skewed.txt','w') as f:
-    f.write('\t'.join(years)+'\n')
-    for i,row in temp.iterrows():        
-        species_trait_array = np.sort(np.random.uniform(0,2,int(row.te-row.ts+1) )) # severely skewed values
-        species_trait_array= [int(row.species)]+ ["NA"]*int(row.ts-min_ts) + list(species_trait_array) + ["NA"]*int(max_te-row.te)
-        species_trait_array = list(map(str,species_trait_array))
-        f.write('\t'.join(species_trait_array)+'\n')
-'''        
-
-#ONLY RUN IF YOU WANT EXACTLY SAME RESULTS AS DANIELES TRAIT GENERATOR
-'''
-species_durations = (ts+1)-te # consider year of origination as a lived year
-for i in species_durations:
-	# make up some trait data
-	np.random.seed(int(i))
-	species_trait_array = np.sort(np.random.uniform(-5,5,int(i)) ) # severely skewed values
-'''
-    
+tm_birth_events, tm_death_events, tm_waiting_times,\
+	tr_birth_events, tr_death_events, tr_waiting_times,\
+	zero_trait = map_all_times(trait_df)
+	    
 # define correlation function
 tranform_rate_func = transform_rate_logistic
-delta_trait = 0.1 # the x0 parmater can only range between min/max trait values +/- 10%
-allowed_x0_range = np.array([ min(tr_waiting_times)*(1-delta_trait), max(tr_waiting_times)*(1+delta_trait)  ])
+#delta_trait = 0.1 # the x0 parmater can only range between min/max trait values +/- 10%
+#allowed_x0_range = np.array([ min(tr_waiting_times)*(1-delta_trait), max(tr_waiting_times)*(1+delta_trait)  ])
 
-#convert to array
-tr_waiting_times = np.array(tr_waiting_times)
-tr_birth_events  = np.array(tr_birth_events )
-tr_death_events  = np.array(tr_death_events )[te>0]
-tm_waiting_times,tm_birth_events,tm_death_events = map_trait_time(ts,te,species_trait_array)
+
+
+#tm_waiting_times,tm_birth_events,tm_death_events = map_trait_time(ts,te,species_trait_array)
 
 
 
@@ -666,7 +630,7 @@ except: pass
 
 out_log = "%s/%s_trait_mcmc.log" % (out_dir, file_name)
 mcmc_logfile = open(out_log , "w",0) 
-mcmc_logfile.write('\t'.join(["it","posterior","likelihood","prior","lambda_avg","mu_avg","K_l","K_m","x0_l","kappa_l","x0_m","kappa_m","root_age","death_age","gamma_rate_hp","poisson_rate_hp"])+'\n')
+mcmc_logfile.write('\t'.join(["it","posterior","likelihood","prior","lambda_avg_t0","mu_avg_t0","K_l","K_m","x0_l","kappa_l","x0_m","kappa_m","root_age","death_age","gamma_rate_hp","poisson_rate_hp"])+'\n')
 out_log = "%s/%s_trait_sp_rates.log" % (out_dir, file_name)
 sp_logfile = open(out_log , "w",0) 
 out_log = "%s/%s_trait_ex_rates.log" % (out_dir, file_name)
@@ -681,8 +645,8 @@ timesMA = np.array([max_time, min_time])
 ####### GLOBAL variables #######
 min_allowed_t = 1   # minimum allowed distance between shifts (to avoid numerical issues)
 Gamma_shape = 2.    # shape parameter of Gamma prior on B/D rates
-hpGamma_shape = 1.2 # shape par of Gamma hyperprior on rate of Gamma priors on B/D rates
-hpGamma_rate =  0.1 # rate par of Gamma hyperprior on rate of Gamma priors on B/D rates
+hpGamma_shape = 2 # shape par of Gamma hyperprior on rate of Gamma priors on B/D rates
+hpGamma_rate =  2 # rate par of Gamma hyperprior on rate of Gamma priors on B/D rates
 
 check_lik = 0 # debug (set to 1 to compare vectorized likelihood against 'traditional' one)
 runMCMC([L_acc,M_acc,timesLA,timesMA])
