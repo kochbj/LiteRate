@@ -84,58 +84,6 @@ def get_prior_shift(t_start,t_end,bins_histogram):
 	print np.array([prior_s,bf2,bf6])
 	return [prior_s,bf2,bf6]
 
-def get_sp_in_frame_br_length(up,lo,ts,te):
-	# index species present in time frame
-	n_all_inframe = np.intersect1d((ts >= lo).nonzero()[0], (te <= up).nonzero()[0])
-	# tot br length within time frame
-	n_t_ts,n_t_te=zeros(len(ts)),zeros(len(ts))
-	n_t_ts[n_all_inframe]= ts[n_all_inframe]   # speciation events before time frame
-	n_t_ts[(n_t_ts>up).nonzero()]=up           # for which length is accounted only from $up$ rather than from $ts$	
-	n_t_te[n_all_inframe]= te[n_all_inframe]   # extinction events in time frame
-	n_t_te[np.intersect1d((n_t_te<lo).nonzero()[0], n_all_inframe)]=lo     # for which length is accounted only until $lo$ rather than to $te$
-	# vector of br lengths within time frame  #(scaled by rho)
-	n_S=((n_t_ts[n_all_inframe]-n_t_te[n_all_inframe])) #*rhos[n_all_inframe])
-	return n_S
-
-def precompute_events(arg):
-	[up,lo,ts,te]=arg
-	# indexes of the species within time frame
-	L_events=np.intersect1d((ts <= up).nonzero()[0], (ts > lo).nonzero()[0])
-	M_events=np.intersect1d((te <= up).nonzero()[0], (te > lo).nonzero()[0])	
-	# get total time lived (or tot branch length) within time window
-	n_S = get_sp_in_frame_br_length(up,lo,ts,te)
-	return len(L_events), len(M_events), sum(n_S)
-
-def get_standing_diversity(f):
-	t_file=np.loadtxt(f, skiprows=1)
-	ts_years = t_file[:,2]
-	te_years = t_file[:,3]
-	if args.present_year== -1: # to load regular pyrate input
-		ts = ts_years
-		te = te_years
-	elif args.present_year==0: # find max year and set to present
-		ts = max(te_years) - ts_years 
-		te = max(te_years) - te_years 
-	else: # user-spec present year
-		ts = args.present_year - ts_years 
-		te = args.present_year - te_years 
-	
-	ts,te = ts.astype(int),te.astype(int)
-	
-
-	max_time = max(ts)
-	min_time = min(te)	
-	sp_events_bin = []
-	ex_events_bin = []
-	br_length_bin = []
-	bins = np.arange(min_time,max_time+1)[::-1]
-	for i in range(len(bins)-1):
-		a,b,c = precompute_events([bins[i],bins[i+1],ts,te])
-		br_length_bin.append(c)
-	br_length_bin = np.array(br_length_bin)
-	print(br_length_bin)
-	#br_length_bin = br_length_bin[1:]	
-	return br_length_bin
 
 def get_marginal_rates(f_name,min_age,max_age,nbins=0,burnin=0.2):
 	# returns a list of 5 items:
@@ -182,7 +130,6 @@ def get_marginal_rates(f_name,min_age,max_age,nbins=0,burnin=0.2):
 	
 	marginal_rates_list = np.array(marginal_rates_list)
 	mean_rates= np.mean(marginal_rates_list,axis=0)
-	print("MEAN RATES",mean_rates)
 	min_rates,max_rates=[],[]
 	for i in range(nbins):
 		hpd = calcHPD(marginal_rates_list[:,i],0.95)
@@ -196,20 +143,9 @@ def get_marginal_rates(f_name,min_age,max_age,nbins=0,burnin=0.2):
 	#print time_frames
 	#quit()
 	time_frames = time_frames[1:]
-	
-	if f_name.find('_sp_rates.log')!=-1: input_file=f_name.replace('pyrate_mcmc_logs/','').replace('_sp_rates.log','.txt')
-	else: input_file=f_name.replace('pyrate_mcmc_logs/','').replace('_ex_rates.log','.txt')
-	if os.path.exists(input_file)==False: input_file = input_file.replace('txt','tsv')
-	 
-	standing_diversity=get_standing_diversity(input_file)
-	standing_diversity=standing_diversity[::-1] #why do I have to do this, I have no idea
-	immigration_rates=standing_diversity * mean_rates
-	im_rates_min=standing_diversity * min_rates
-	im_rates_max=standing_diversity * max_rates
-
 	#print len(time_frames),len(mean_rates), 
 	n_mcmc_samples = len(post_rate)-burnin # number of samples used to normalize frequencies of rate shifts
-	return [time_frames,mean_rates,np.array(min_rates),np.array(max_rates),np.array(times_of_shift),n_mcmc_samples,immigration_rates,im_rates_min,im_rates_max]
+	return [time_frames,mean_rates,np.array(min_rates),np.array(max_rates),np.array(times_of_shift),n_mcmc_samples]
 
 
 def get_r_plot(res,col,parameter,min_age,max_age,plot_title,plot_log,run_simulation=1):
@@ -225,34 +161,16 @@ def get_r_plot(res,col,parameter,min_age,max_age,plot_title,plot_log,run_simulat
 	out_str += print_R_vec("\nrate",res[1][::-1])
 	out_str += print_R_vec("\nminHPD",res[2][::-1])
 	out_str += print_R_vec("\nmaxHPD",res[3][::-1])
-	
-	out_str += print_R_vec("\nmigrate",res[6][::-1]) 
-	out_str += print_R_vec("\nmi_minHPD",res[7][::-1])
-	out_str += print_R_vec("\nmi_maxHPD",res[8][::-1]) 
-	
 	if plot_log==0:
 		out_str += "\nplot(time,time,type = 'n', ylim = c(%s, %s), xlim = c(%s,%s), ylab = '%s', xlab = 'Time (%s)',main='%s' )" \
 			% (0,1.1*np.nanmax(res[3]),minXaxis,maxXaxis,parameter,time_lab,plot_title) 
 		out_str += "\npolygon(c(time, rev(time)), c(maxHPD, rev(minHPD)), col = alpha('%s',0.3), border = NA)" % (col)
 		out_str += "\nlines(time,rate, col = '%s', lwd=2)" % (col)
-		
-				#MIGRATION RATES
-		out_str += "\nplot(time,time,type = 'n', ylim = c(%s, %s), xlim = c(%s,%s), ylab = '%s', xlab = 'Time (%s)',main='%s' )" \
-			% (0,1.1*np.nanmax(res[6]),minXaxis,maxXaxis,"Migration Rate",time_lab,plot_title)
-		out_str += "\npolygon(c(time, rev(time)), c(mi_maxHPD, rev(mi_minHPD)), col = alpha('%s',0.3), border = NA)" % (col)
-		out_str += "\nlines(time,migrate, col = '%s', lwd=2)" % (col)
-		
 	else:
 		out_str += "\nplot(time,time,type = 'n', ylim = c(%s, %s), xlim = c(%s,%s), ylab = 'Log10 %s', xlab = 'Time (%s)',main='%s' )" \
 			% (np.nanmin(np.log10(0.9*res[2])),np.nanmax(np.log10(1.1*res[3])),minXaxis,maxXaxis,parameter,time_lab,plot_title) 
 		out_str += "\npolygon(c(time, rev(time)), c(log10(maxHPD), rev(log10(minHPD))), col = alpha('%s',0.3), border = NA)" % (col)
 		out_str += "\nlines(time,log10(rate), col = '%s', lwd=2)" % (col)
-		
-		#MIGRATON RATES
-		out_str += "\nplot(time,time,type = 'n', ylim = c(%s, %s), xlim = c(%s,%s), ylab = 'Log10 %s', xlab = 'Time (%s)',main='%s' )" \
-			% (np.nanmin(np.log10(0.9*res[2])),np.nanmax(np.log10(1.1*res[6])),minXaxis,maxXaxis,"Migration Rate",time_lab,plot_title) 
-		out_str += "\npolygon(c(time, rev(time)), c(log10(mi_maxHPD), rev(log10(mi_minHPD))), col = alpha('%s',0.3), border = NA)" % (col)
-		out_str += "\nlines(time,log10(migrate), col = '%s', lwd=2)" % (col)
 		
 	# add barplot rate shifts
 	if present_year == -1: bins_histogram = np.linspace(min_age,max_age,len(res[0]))
@@ -425,7 +343,7 @@ def plot_marginal_rates(path_dir,trait_dir,name_tag="",bin_size=1.,burnin=0.2,mi
 	if logT==1: outname = "Log_"
 	else: outname = ""
 	if max_age>0: outname+= "t%s" % (int(max_age))
-	r_str = "\n\npdf(file='%s/%sRTT_plots.pdf',width=12, height=8)\npar(mfrow=c(2,4))\nlibrary(scales)" % (wd,outname)
+	r_str = "\n\npdf(file='%s/%sRTT_plots.pdf',width=12, height=8)\npar(mfrow=c(2,3))\nlibrary(scales)" % (wd,outname)
 	trait_out_pdf=PdfPages(wd+'/'+outname+'TRAITplots.pdf')
 	for mcmc_file in files:
 		if 2>1: #try:
